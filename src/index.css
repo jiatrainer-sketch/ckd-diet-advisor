@@ -1,0 +1,38 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    font-size: 17px;
+  }
+  body {
+    @apply bg-gray-50 text-gray-800;
+    font-family: 'Sarabun', sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+}
+
+@layer components {
+  .tab-btn {
+    @apply flex flex-col items-center justify-center gap-0.5 py-2 px-1 text-xs font-medium transition-colors;
+  }
+  .badge-safe {
+    @apply inline-flex items-center gap-1 bg-green-100 text-green-800 text-sm font-semibold px-2.5 py-0.5 rounded-full;
+  }
+  .badge-caution {
+    @apply inline-flex items-center gap-1 bg-yellow-100 text-yellow-800 text-sm font-semibold px-2.5 py-0.5 rounded-full;
+  }
+  .badge-danger {
+    @apply inline-flex items-center gap-1 bg-red-100 text-red-800 text-sm font-semibold px-2.5 py-0.5 rounded-full;
+  }
+  .nutrient-tag {
+    @apply text-xs font-medium px-1.5 py-0.5 rounded;
+  }
+}
+
+/* Smooth scroll */
+html { scroll-behavior: smooth; }
+
+/* Safe area for mobile */
+.pb-safe { padding-bottom: env(safe-area-inset-bottom, 1rem); }
