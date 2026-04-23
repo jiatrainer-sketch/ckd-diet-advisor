@@ -27,61 +27,110 @@ export function clearLocalPatient() {
   catch { /* ignore */ }
   setPatientToken(null)
 }
-export { getPatientToken }
+export { getPatientToken, hasSupabase }
 
-// ── register (via SECURITY DEFINER RPC) ───────────────────────────────
+const LOCAL_PATIENT_KEY = 'ckd_patient_local'
+function readLocalPatient() {
+  try { return JSON.parse(localStorage.getItem(LOCAL_PATIENT_KEY) || 'null') }
+  catch { return null }
+}
+function writeLocalPatient(p) {
+  try { localStorage.setItem(LOCAL_PATIENT_KEY, JSON.stringify(p)) }
+  catch { /* ignore */ }
+}
+
+function randomId() {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID()
+  // RFC 4122 v4 fallback
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+    const r = (Math.random() * 16) | 0
+    return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16)
+  })
+}
+
+// ── register (Supabase RPC when configured, else local-only) ──────────
 export async function registerPatient({
   name, surname, phone, ckdStage,
   hasDm, hasHtn, riskLevel, albLevel, isPilot,
 }) {
-  if (!hasSupabase) return { error: 'no_supabase' }
-  const sb = getSupabase()
+  const cleanName    = (name || '').trim()
+  const cleanSurname = (surname || '').trim()
+  const cleanPhone   = (phone || '').trim() || null
+  const alb = albLevel != null && albLevel !== '' ? parseInt(albLevel, 10) : null
 
-  const { data, error } = await sb.rpc('register_patient', {
-    p_name:       (name || '').trim(),
-    p_surname:    (surname || '').trim(),
-    p_phone:      (phone || '').trim() || null,
-    p_ckd_stage:  ckdStage || null,
-    p_has_dm:     !!hasDm,
-    p_has_htn:    !!hasHtn,
-    p_risk_level: riskLevel || null,
-    p_alb_level:  albLevel != null && albLevel !== '' ? parseInt(albLevel, 10) : null,
-    p_is_pilot:   !!isPilot,
-  })
+  if (hasSupabase) {
+    const sb = getSupabase()
+    const { data, error } = await sb.rpc('register_patient', {
+      p_name:       cleanName,
+      p_surname:    cleanSurname,
+      p_phone:      cleanPhone,
+      p_ckd_stage:  ckdStage || null,
+      p_has_dm:     !!hasDm,
+      p_has_htn:    !!hasHtn,
+      p_risk_level: riskLevel || null,
+      p_alb_level:  alb,
+      p_is_pilot:   !!isPilot,
+    })
 
-  if (error) return { error: error.message || 'register_failed' }
-
-  const row = Array.isArray(data) ? data[0] : data
-  if (!row?.id || !row?.claim_token) return { error: 'register_failed' }
-
-  setLocalPatientId(row.id)
-  setPatientToken(row.claim_token)
-
-  return {
-    data: {
-      id:          row.id,
-      name:        (name || '').trim(),
-      surname:     (surname || '').trim(),
-      phone:       (phone || '').trim() || null,
-      ckd_stage:   ckdStage || null,
-      has_dm:      !!hasDm,
-      has_htn:     !!hasHtn,
-      is_pilot:    !!isPilot,
-      risk_level:  riskLevel || null,
-    },
+    if (!error) {
+      const row = Array.isArray(data) ? data[0] : data
+      if (row?.id && row?.claim_token) {
+        setLocalPatientId(row.id)
+        setPatientToken(row.claim_token)
+        const patient = {
+          id:         row.id,
+          name:       cleanName,
+          surname:    cleanSurname,
+          phone:      cleanPhone,
+          ckd_stage:  ckdStage || null,
+          has_dm:     !!hasDm,
+          has_htn:    !!hasHtn,
+          is_pilot:   !!isPilot,
+          risk_level: riskLevel || null,
+          alb_level:  alb,
+        }
+        writeLocalPatient(patient)
+        return { data: patient }
+      }
+    }
+    // Supabase configured but call failed → fall through to offline register
+    console.warn('[registerPatient] falling back to offline:', error?.message)
   }
+
+  // Offline register: generate local UUID, persist to localStorage only.
+  const id = randomId()
+  const patient = {
+    id,
+    name:       cleanName,
+    surname:    cleanSurname,
+    phone:      cleanPhone,
+    ckd_stage:  ckdStage || null,
+    has_dm:     !!hasDm,
+    has_htn:    !!hasHtn,
+    is_pilot:   !!isPilot,
+    risk_level: riskLevel || null,
+    alb_level:  alb,
+    registered_at: new Date().toISOString(),
+    last_active:   new Date().toISOString(),
+    _offline:   true,
+  }
+  setLocalPatientId(id)
+  writeLocalPatient(patient)
+  return { data: patient, offline: true }
 }
 
-// ── get patient ────────────────────────────────────────────────────────
+// ── get patient (cloud if configured, else local) ────────────────────
 export async function getPatient(id) {
-  if (!hasSupabase || !id) return null
-  const sb = getSupabase()
-  const { data, error } = await sb.from('patients').select('*').eq('id', id).maybeSingle()
-  if (error) {
-    console.warn('[getPatient] supabase error:', error.message)
-    return null
+  if (!id) return null
+  if (hasSupabase && getPatientToken()) {
+    const sb = getSupabase()
+    const { data, error } = await sb.from('patients').select('*').eq('id', id).maybeSingle()
+    if (!error && data) return data
+    if (error) console.warn('[getPatient] supabase error:', error.message)
   }
-  return data
+  const local = readLocalPatient()
+  if (local && local.id === id) return local
+  return null
 }
 
 // ── localStorage fallback helpers ─────────────────────────────────────
@@ -160,30 +209,39 @@ export async function getTodayLogs(patientId) {
 // ── photo quota ───────────────────────────────────────────────────────
 export const DAILY_PHOTO_LIMIT = 5
 
+function localQuotaKey() { return `ckd_photo_${localDateStr()}` }
+function readLocalQuota() {
+  try { return parseInt(localStorage.getItem(localQuotaKey()) || '0', 10) || 0 }
+  catch { return 0 }
+}
+function bumpLocalQuota() {
+  try {
+    const next = readLocalQuota() + 1
+    localStorage.setItem(localQuotaKey(), String(next))
+    return next
+  } catch { return null }
+}
+
 export async function getPhotoCount(patientId) {
-  if (!hasSupabase || !patientId || !getPatientToken()) return 0
-  const sb = getSupabase()
-  const { data, error } = await sb.from('photo_quota').select('count')
-    .eq('patient_id', patientId)
-    .eq('quota_date', localDateStr())
-    .maybeSingle()
-  if (error) {
+  if (!patientId) return 0
+  if (hasSupabase && getPatientToken()) {
+    const sb = getSupabase()
+    const { data, error } = await sb.from('photo_quota').select('count')
+      .eq('patient_id', patientId)
+      .eq('quota_date', localDateStr())
+      .maybeSingle()
+    if (!error) return data?.count || 0
     console.warn('[getPhotoCount] supabase error:', error.message)
-    return 0
   }
-  return data?.count || 0
+  return readLocalQuota()
 }
 
 export async function incrementPhotoCount(patientId) {
-  if (!hasSupabase || !patientId || !getPatientToken()) return null
-  const sb = getSupabase()
-  const { data, error } = await sb.rpc('increment_photo_quota', {
-    p_patient_id: patientId,
-    p_date:       localDateStr(),
-  })
-  if (error) {
-    console.warn('[incrementPhotoCount] rpc error:', error.message)
+  if (!patientId) return null
+  if (hasSupabase && getPatientToken()) {
+    // server-side /api/analyze already increments when service_role is set;
+    // this is a no-op for cloud mode so we don't double-count.
     return null
   }
-  return data
+  return bumpLocalQuota()
 }

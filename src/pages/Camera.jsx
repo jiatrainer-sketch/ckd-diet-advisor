@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { getLocalPatientId, getPhotoCount, DAILY_PHOTO_LIMIT, logFood } from '../lib/patient'
+import { getLocalPatientId, getPhotoCount, incrementPhotoCount, DAILY_PHOTO_LIMIT, logFood } from '../lib/patient'
 import { getPatientToken } from '../lib/supabase'
 
 const MEALS = [
@@ -155,8 +155,9 @@ export default function Camera() {
         throw new Error(data.error || 'วิเคราะห์ไม่สำเร็จ')
       }
       setResult(data)
-      // reconcile client counter with server
       if (patientId) {
+        // offline mode: server skipped quota → bump local. cloud mode: no-op.
+        await incrementPhotoCount(patientId)
         const current = await getPhotoCount(patientId)
         setPhotoCount(typeof current === 'number' ? current : c => c + 1)
       }

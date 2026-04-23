@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { registerPatient } from '../lib/patient'
+import { registerPatient, hasSupabase } from '../lib/patient'
 
 const STAGES = [
   { value: '', label: 'ยังไม่รู้ (จากการคัดกรอง)' },
@@ -65,6 +65,15 @@ export default function Register({ profile, onDone }) {
         <h1 className="text-xl font-extrabold text-sky-700">📋 ลงทะเบียนบันทึกอาหาร</h1>
         <p className="text-sm text-gray-500 mt-0.5">เพื่อติดตามการคุมอาหารและให้หมอแนะนำได้</p>
       </div>
+
+      {!hasSupabase && (
+        <div className="bg-amber-50 border-2 border-amber-300 rounded-2xl p-3">
+          <p className="text-xs font-bold text-amber-800">📴 โหมดเครื่องเดียว</p>
+          <p className="text-xs text-amber-700 mt-0.5">
+            ข้อมูลเก็บเฉพาะในเครื่องนี้ (ยังไม่ได้ตั้ง cloud) — ลบเบราว์เซอร์ = ข้อมูลหาย
+          </p>
+        </div>
+      )}
 
       {/* Form */}
       <div className="bg-white rounded-2xl border border-gray-200 p-4 space-y-3">
