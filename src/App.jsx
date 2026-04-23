@@ -62,7 +62,11 @@ export default function App() {
     if (fromScreeningQR) {
       return { ...DEFAULT_PROFILE, hasDiabetes: params.get('dm')==='1', hasHypertension: params.get('htn')==='1' }
     }
-    try { const s = localStorage.getItem('ckd_profile'); return s ? JSON.parse(s) : DEFAULT_PROFILE } catch { return DEFAULT_PROFILE }
+    try {
+      const s = localStorage.getItem('ckd_profile')
+      const parsed = s ? JSON.parse(s) : null
+      return parsed && typeof parsed === 'object' ? { ...DEFAULT_PROFILE, ...parsed } : DEFAULT_PROFILE
+    } catch { return DEFAULT_PROFILE }
   })
 
   useEffect(() => { localStorage.setItem('ckd_profile', JSON.stringify(profile)) }, [profile])

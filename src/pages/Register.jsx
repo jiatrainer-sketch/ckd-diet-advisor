@@ -28,17 +28,22 @@ export default function Register({ profile, onDone }) {
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
 
   const submit = async () => {
-    if (!form.name.trim() || !form.surname.trim()) {
+    const name    = form.name.trim().slice(0, 80)
+    const surname = form.surname.trim().slice(0, 80)
+    const phone   = form.phone.trim().slice(0, 20)
+
+    if (!name || !surname) {
       setError('กรุณากรอกชื่อ-นามสกุล'); return
+    }
+    if (phone && !/^[0-9+\-() ]{8,20}$/.test(phone)) {
+      setError('เบอร์โทรไม่ถูกต้อง (ใช้ตัวเลข 8–20 หลัก)'); return
     }
     if (!form.pdpa) {
       setError('กรุณายินยอม PDPA ก่อน'); return
     }
     setLoading(true); setError('')
     const result = await registerPatient({
-      name:      form.name.trim(),
-      surname:   form.surname.trim(),
-      phone:     form.phone.trim(),
+      name, surname, phone,
       ckdStage:  form.stage,
       hasDm:     form.hasDm,
       hasHtn:    form.hasHtn,
@@ -69,8 +74,9 @@ export default function Register({ profile, onDone }) {
             <input
               className="w-full border border-gray-300 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-sky-500"
               placeholder="สมชาย"
+              maxLength={80}
               value={form.name}
-              onChange={e => set('name', e.target.value)}
+              onChange={e => set('name', e.target.value.slice(0, 80))}
             />
           </div>
           <div>
@@ -78,8 +84,9 @@ export default function Register({ profile, onDone }) {
             <input
               className="w-full border border-gray-300 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-sky-500"
               placeholder="ใจดี"
+              maxLength={80}
               value={form.surname}
-              onChange={e => set('surname', e.target.value)}
+              onChange={e => set('surname', e.target.value.slice(0, 80))}
             />
           </div>
         </div>
@@ -90,8 +97,11 @@ export default function Register({ profile, onDone }) {
             className="w-full border border-gray-300 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-sky-500"
             placeholder="08x-xxx-xxxx"
             type="tel"
+            inputMode="tel"
+            maxLength={20}
+            pattern="[0-9+\-() ]{8,20}"
             value={form.phone}
-            onChange={e => set('phone', e.target.value)}
+            onChange={e => set('phone', e.target.value.slice(0, 20))}
           />
         </div>
 

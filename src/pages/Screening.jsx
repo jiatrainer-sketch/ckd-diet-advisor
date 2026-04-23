@@ -1,3 +1,5 @@
+const CLINIC_PHONE = import.meta.env.VITE_CLINIC_PHONE || ''
+
 export default function Screening({ risk, alb, profile, onGoFood, onGoCamera }) {
   const riskConfig = {
     high:   { bg: 'bg-red-50',    border: 'border-red-300',   text: 'text-red-700',   badge: 'bg-red-100 text-red-800',   icon: '🔴', label: 'ความเสี่ยงสูง' },
@@ -52,12 +54,18 @@ export default function Screening({ risk, alb, profile, onGoFood, onGoCamera }) 
           <div className="flex items-center gap-2">☐ <span>Urine ACR</span></div>
           {hasDM && <div className="flex items-center gap-2">☐ <span>HbA1c</span></div>}
         </div>
-        <a
-          href="tel:0800000000"
-          className="mt-3 flex items-center justify-center gap-2 bg-sky-600 text-white rounded-xl py-2.5 font-bold text-sm"
-        >
-          📍 นัดตรวจเลือดที่ W Medical Hospital
-        </a>
+        {CLINIC_PHONE ? (
+          <a
+            href={`tel:${CLINIC_PHONE.replace(/[^0-9+]/g, '')}`}
+            className="mt-3 flex items-center justify-center gap-2 bg-sky-600 text-white rounded-xl py-2.5 font-bold text-sm"
+          >
+            📍 โทรนัดตรวจเลือด ({CLINIC_PHONE})
+          </a>
+        ) : (
+          <div className="mt-3 bg-sky-100 text-sky-800 rounded-xl py-2.5 text-center font-bold text-sm">
+            📍 ติดต่อนัดตรวจเลือดที่ W Medical Hospital
+          </div>
+        )}
       </div>
 
       {/* What you can do NOW */}

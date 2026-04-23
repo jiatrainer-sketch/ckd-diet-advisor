@@ -24,31 +24,38 @@ function NutriBadge({ val, limit, unit, label }) {
 }
 
 // ── Fuzzy search scorer ────────────────────────────────────────────────
-function scoreFood(food, query) {
-  const name = food.name
-  if (!query) return 0
-  // exact contains → highest
-  if (name.includes(query)) return 100
-  // all chars of query appear in name in order (subsequence)
+function norm(s) {
+  return (s || '').toString().toLowerCase().replace(/\s+/g, '').trim()
+}
+function scoreFood(food, q) {
+  const name = norm(food.name)
+  if (!q || !name) return 0
+  if (name.includes(q)) return 100
   let i = 0
   for (const ch of name) {
-    if (ch === query[i]) i++
-    if (i === query.length) return 80
+    if (ch === q[i]) i++
+    if (i === q.length) return 80
   }
-  // count matching chars (any order)
-  const matched = query.split('').filter(ch => name.includes(ch)).length
-  return Math.round((matched / query.length) * 60)
+  const matched = Array.from(q).filter(ch => name.includes(ch)).length
+  return Math.round((matched / q.length) * 60)
 }
 
 function fuzzySearch(query) {
-  if (!query || query.length < 1) return []
-  const scored = foods
-    .map(f => ({ f, score: scoreFood(f, query) }))
-    .filter(x => x.score >= 50)               // เกณฑ์ขั้นต่ำ 50 คะแนน
+  const q = norm(query)
+  if (!q) return []
+  return foods
+    .map(f => ({ f, score: scoreFood(f, q) }))
+    .filter(x => x.score >= 50)
     .sort((a, b) => b.score - a.score)
     .slice(0, 10)
     .map(x => x.f)
-  return scored
+}
+
+// parse a numeric input, clamp to [0, max], NaN → 0
+function parseMg(v, max = 5000) {
+  const n = Number(String(v).replace(/,/g, ''))
+  if (!Number.isFinite(n) || n < 0) return 0
+  return Math.min(max, Math.round(n))
 }
 
 export default function FoodDiary({ patientId, profile, onGoCamera }) {
@@ -70,6 +77,7 @@ export default function FoodDiary({ patientId, profile, onGoCamera }) {
   const [customSaved,  setCustomSaved]  = useState(false)
   const [estimating, setEstimating] = useState(false)
   const [estimateNote, setEstimateNote] = useState('')
+  const [offlineWarn, setOfflineWarn] = useState(false)
 
   // limits based on stage
   const stage = profile?.stage || ''
@@ -99,12 +107,12 @@ export default function FoodDiary({ patientId, profile, onGoCamera }) {
   const addFood = async () => {
     if (!selected) return
     setSaving(true)
-    const ratio = portion / 100
-    await logFood({
+    const ratio = (Number(portion) || 100) / 100
+    const res = await logFood({
       patientId,
       mealType:   meal,
       foodName:   selected.name,
-      portionGrams: portion,
+      portionGrams: Number(portion) || 100,
       potassium:  Math.round(selected.k  * ratio),
       phosphorus: Math.round(selected.p  * ratio),
       sodium:     Math.round(selected.na * ratio),
@@ -113,6 +121,7 @@ export default function FoodDiary({ patientId, profile, onGoCamera }) {
       safety:     'known',
       photoUsed:  false,
     })
+    setOfflineWarn(!!res?.offline)
     setSaving(false)
     setSaved(true)
     setTimeout(() => setSaved(false), 1500)
@@ -146,21 +155,23 @@ export default function FoodDiary({ patientId, profile, onGoCamera }) {
 
   // บันทึกอาหารที่กรอกเอง
   const addCustomFood = async () => {
-    if (!customName.trim()) return
+    const name = customName.trim().slice(0, 120)
+    if (!name) return
     setCustomSaving(true)
-    await logFood({
+    const res = await logFood({
       patientId,
       mealType:     meal,
-      foodName:     customName.trim(),
-      portionGrams: 1,          // ไม่ได้คำนวณต่อ 100g → บันทึกเป็น per serving
-      potassium:  parseInt(customK)  || 0,
-      phosphorus: parseInt(customP)  || 0,
-      sodium:     parseInt(customNa) || 0,
-      protein:    0,
-      calories:   0,
-      safety:     'custom',
-      photoUsed:  false,
+      foodName:     name,
+      perServing:   true,
+      potassium:    parseMg(customK),
+      phosphorus:   parseMg(customP),
+      sodium:       parseMg(customNa),
+      protein:      0,
+      calories:     0,
+      safety:       'custom',
+      photoUsed:    false,
     })
+    setOfflineWarn(!!res?.offline)
     setCustomSaving(false)
     setCustomSaved(true)
     setTimeout(() => setCustomSaved(false), 1500)
@@ -208,6 +219,13 @@ export default function FoodDiary({ patientId, profile, onGoCamera }) {
             {alertFlags.map((f, i) => <p key={i} className="text-xs text-red-700 font-semibold">{f}</p>)}
           </div>
         )}
+        {offlineWarn && (
+          <div className="mt-2 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
+            <p className="text-xs text-amber-700 font-semibold">
+              📴 บันทึกในเครื่อง (ไม่ได้ซิงก์ขึ้น cloud) — หมอจะยังมองไม่เห็นข้อมูลนี้
+            </p>
+          </div>
+        )}
       </div>
 
       <div className="p-4 space-y-4">
@@ -244,7 +262,8 @@ export default function FoodDiary({ patientId, profile, onGoCamera }) {
                 <div className="flex gap-2">
                   <input className="flex-1 border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-purple-500"
                     placeholder="เช่น ข้าวต้มหมูสับ, แกงส้มปลา..."
-                    value={customName} onChange={e => { setCustomName(e.target.value); setEstimateNote('') }} />
+                    maxLength={120}
+                    value={customName} onChange={e => { setCustomName(e.target.value.slice(0, 120)); setEstimateNote('') }} />
                   <button onClick={estimateByAI} disabled={estimating || !customName.trim()}
                     className="bg-indigo-600 text-white text-xs font-bold px-3 py-2 rounded-xl disabled:opacity-50 whitespace-nowrap">
                     {estimating ? '⏳...' : '🤖 AI ประมาณ'}

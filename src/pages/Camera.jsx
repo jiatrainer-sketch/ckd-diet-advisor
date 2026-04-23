@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
-import { getLocalPatientId, getPhotoCount, incrementPhotoCount, DAILY_PHOTO_LIMIT, logFood } from '../lib/patient'
+import { getLocalPatientId, getPhotoCount, DAILY_PHOTO_LIMIT, logFood } from '../lib/patient'
+import { getPatientToken } from '../lib/supabase'
 
 const MEALS = [
   { id: 'breakfast', label: 'เช้า',    icon: '🌅' },
@@ -57,6 +58,7 @@ export default function Camera() {
   const cameraRef = useRef()
   const videoRef = useRef()
   const streamRef = useRef()
+  const inFlightRef = useRef(false)
 
   const startCamera = async () => {
     setShowLiveCamera(true)
@@ -122,31 +124,47 @@ export default function Camera() {
 
   const analyze = async () => {
     if (!image || !mode) return
-    // quota check
+    if (inFlightRef.current) return
+    // client-side quota hint (server enforces the real limit)
     if (patientId && photoCount >= DAILY_PHOTO_LIMIT) {
       setError(`ใช้ครบ ${DAILY_PHOTO_LIMIT} รูปแล้ววันนี้ — กลับมาใหม่พรุ่งนี้ หรือเลือกอาหารจากรายการแทน`)
       return
     }
+    inFlightRef.current = true
     setLoading(true)
     setError(null)
     try {
       const res = await fetch('/api/analyze', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ image, mode: mode.id }),
+        body: JSON.stringify({
+          image,
+          mode: mode.id,
+          patientId: patientId || null,
+          claimToken: getPatientToken(),
+        }),
       })
-      const data = await res.json()
-      if (data.error) throw new Error(data.error)
+      const data = await res.json().catch(() => ({ error: 'invalid_response' }))
+      if (!res.ok || data.error) {
+        if (data.error === 'quota_exceeded') {
+          setPhotoCount(DAILY_PHOTO_LIMIT)
+          throw new Error(`ใช้ครบ ${DAILY_PHOTO_LIMIT} รูปแล้ววันนี้`)
+        }
+        if (data.error === 'image_too_large') throw new Error('รูปใหญ่เกินไป — ถ่ายใหม่')
+        if (data.error === 'forbidden_origin') throw new Error('ต้นทางไม่ถูกต้อง')
+        throw new Error(data.error || 'วิเคราะห์ไม่สำเร็จ')
+      }
       setResult(data)
-      // increment quota
+      // reconcile client counter with server
       if (patientId) {
-        await incrementPhotoCount(patientId)
-        setPhotoCount(c => c + 1)
+        const current = await getPhotoCount(patientId)
+        setPhotoCount(typeof current === 'number' ? current : c => c + 1)
       }
     } catch (err) {
       setError(err.message)
     } finally {
       setLoading(false)
+      inFlightRef.current = false
     }
   }
 

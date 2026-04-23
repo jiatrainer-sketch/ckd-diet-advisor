@@ -1,4 +1,9 @@
+import { json, originAllowed, readJson, sbRest } from './_utils.js'
+
 export const config = { runtime: 'edge' }
+
+const MAX_IMAGE_BYTES = 6 * 1024 * 1024   // 6 MB raw base64 payload
+const DAILY_PHOTO_LIMIT = 5
 
 const PROMPTS = {
   food: `คุณเป็นนักโภชนาการผู้เชี่ยวชาญโรคไต (CKD) ที่พูดภาษาไทย
@@ -88,31 +93,63 @@ const PROMPTS = {
 ถ้าค่าใดอ่านไม่ได้ให้ value = null ถ้าภาพไม่ใช่ Lab ให้ summary = "ไม่พบผล Lab กรุณาถ่ายใหม่"`,
 }
 
+async function checkAndIncrementQuota(patientId, claimToken) {
+  // Best-effort server-side quota enforcement. If Supabase isn't configured,
+  // silently skip (dev/local). Returns an error string if blocked.
+  if (!patientId || !claimToken) return null
+  if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) return null
+
+  // Verify claim_token so we don't charge a random patient_id.
+  const rows = await sbRest(
+    `/rest/v1/patients?id=eq.${encodeURIComponent(patientId)}&select=id,claim_token`,
+  ).catch(() => null)
+  if (!Array.isArray(rows) || rows.length === 0) return 'invalid_patient'
+  if (rows[0].claim_token !== claimToken) return 'invalid_patient'
+
+  const today = new Date().toISOString().slice(0, 10)
+  const quota = await sbRest(
+    `/rest/v1/photo_quota?patient_id=eq.${encodeURIComponent(patientId)}&quota_date=eq.${today}&select=count`,
+  ).catch(() => [])
+  const current = Array.isArray(quota) && quota[0] ? quota[0].count || 0 : 0
+  if (current >= DAILY_PHOTO_LIMIT) return 'quota_exceeded'
+
+  await sbRest(`/rest/v1/photo_quota?on_conflict=patient_id,quota_date`, {
+    method: 'POST',
+    headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
+    body: JSON.stringify({ patient_id: patientId, quota_date: today, count: current + 1 }),
+  }).catch(() => null)
+
+  return null
+}
+
 export default async function handler(req) {
-  if (req.method !== 'POST') {
-    return new Response(JSON.stringify({ error: 'Method not allowed' }), { status: 405 })
-  }
+  if (req.method === 'OPTIONS') return new Response(null, { status: 204 })
+  if (req.method !== 'POST') return json({ error: 'method_not_allowed' }, { status: 405 })
+  if (!originAllowed(req))     return json({ error: 'forbidden_origin' }, { status: 403 })
 
   const apiKey = process.env.ANTHROPIC_API_KEY
-  if (!apiKey) {
-    return new Response(JSON.stringify({ error: 'API key not configured' }), { status: 500 })
-  }
+  if (!apiKey) return json({ error: 'api_key_not_configured' }, { status: 500 })
 
   let body
   try {
-    body = await req.json()
-  } catch {
-    return new Response(JSON.stringify({ error: 'Invalid JSON' }), { status: 400 })
+    body = await readJson(req, MAX_IMAGE_BYTES + 1024)
+  } catch (e) {
+    return json({ error: e.message }, { status: e.status || 400 })
   }
 
-  const { image, mode } = body
-  if (!image || !mode) {
-    return new Response(JSON.stringify({ error: 'Missing image or mode' }), { status: 400 })
+  const { image, mode, patientId, claimToken } = body
+  if (!image || !mode) return json({ error: 'missing_image_or_mode' }, { status: 400 })
+  if (typeof image !== 'string' || image.length > MAX_IMAGE_BYTES) {
+    return json({ error: 'image_too_large' }, { status: 413 })
   }
 
   const prompt = PROMPTS[mode]
-  if (!prompt) {
-    return new Response(JSON.stringify({ error: 'Invalid mode' }), { status: 400 })
+  if (!prompt) return json({ error: 'invalid_mode' }, { status: 400 })
+
+  const quotaErr = await checkAndIncrementQuota(patientId, claimToken)
+  if (quotaErr) {
+    const status = quotaErr === 'quota_exceeded' ? 429 : 403
+    return json({ error: quotaErr }, { status })
   }
 
   // Extract base64 data
@@ -128,7 +165,7 @@ export default async function handler(req) {
         'content-type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
+        model: 'claude-sonnet-4-5',
         max_tokens: 1024,
         messages: [
           {
@@ -144,23 +181,22 @@ export default async function handler(req) {
 
     if (!response.ok) {
       const err = await response.text()
-      return new Response(JSON.stringify({ error: `Claude API error: ${err}` }), { status: 500 })
+      return json({ error: 'claude_api_error', detail: err.slice(0, 500) }, { status: 502 })
     }
 
     const data = await response.json()
-    const text = data.content[0].text.trim()
+    const text = data?.content?.[0]?.text?.trim()
+    if (!text) return json({ error: 'empty_response' }, { status: 502 })
 
-    // Parse JSON from response
     const jsonMatch = text.match(/\{[\s\S]*\}/)
-    if (!jsonMatch) {
-      return new Response(JSON.stringify({ error: 'Could not parse response', raw: text }), { status: 500 })
-    }
+    if (!jsonMatch) return json({ error: 'could_not_parse', raw: text.slice(0, 500) }, { status: 502 })
 
-    const result = JSON.parse(jsonMatch[0])
-    return new Response(JSON.stringify(result), {
-      headers: { 'content-type': 'application/json' },
-    })
+    let result
+    try { result = JSON.parse(jsonMatch[0]) }
+    catch { return json({ error: 'invalid_json_from_model' }, { status: 502 }) }
+
+    return json(result)
   } catch (err) {
-    return new Response(JSON.stringify({ error: err.message }), { status: 500 })
+    return json({ error: 'upstream_error', detail: (err?.message || '').slice(0, 200) }, { status: 502 })
   }
 }
