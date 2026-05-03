@@ -142,15 +142,32 @@ export default function FoodDiary({ patientId, profile, onGoCamera }) {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ foodName: customName.trim() }),
       })
-      const data = await res.json()
-      if (data.na !== undefined) setCustomNa(String(data.na))
-      if (data.k  !== undefined) setCustomK(String(data.k))
-      if (data.p  !== undefined) setCustomP(String(data.p))
-      if (data.note) setEstimateNote(data.note)
-    } catch {
-      setEstimateNote('ประมาณค่าไม่ได้ กรุณากรอกเอง')
+      const data = await res.json().catch(() => ({}))
+
+      if (!res.ok || data.error) {
+        const msg =
+          data.error === 'api_key_not_configured' ? 'ระบบยังไม่ได้ตั้ง ANTHROPIC_API_KEY บนเซิร์ฟเวอร์' :
+          data.error === 'forbidden_origin'       ? 'ต้นทางไม่ถูกต้อง (เช็ค ALLOWED_ORIGINS)' :
+          data.error === 'claude_api_error'       ? 'Claude API ตอบ error — เช็ค API key' :
+          data.error === 'parse_error'            ? 'AI ตอบในรูปแบบที่ไม่รู้จัก ลองใหม่' :
+          data.error === 'name_too_long'          ? 'ชื่ออาหารยาวเกิน' :
+          (data.error || `เซิร์ฟเวอร์ตอบ ${res.status}`)
+        setEstimateNote(`❌ ${msg}`)
+        return
+      }
+
+      const naNum = Number(data.na)
+      const kNum  = Number(data.k)
+      const pNum  = Number(data.p)
+      if (Number.isFinite(naNum)) setCustomNa(String(Math.max(0, Math.round(naNum))))
+      if (Number.isFinite(kNum))  setCustomK(String(Math.max(0, Math.round(kNum))))
+      if (Number.isFinite(pNum))  setCustomP(String(Math.max(0, Math.round(pNum))))
+      setEstimateNote(data.note || 'ค่าโดยประมาณ — แก้ไขได้')
+    } catch (err) {
+      setEstimateNote(`❌ ประมาณค่าไม่ได้: ${err?.message || 'network error'}`)
+    } finally {
+      setEstimating(false)
     }
-    setEstimating(false)
   }
 
   // บันทึกอาหารที่กรอกเอง
@@ -270,7 +287,9 @@ export default function FoodDiary({ patientId, profile, onGoCamera }) {
                   </button>
                 </div>
                 {estimateNote && (
-                  <p className="text-xs text-indigo-600 mt-1">✨ {estimateNote} — ตรวจสอบและแก้ไขได้</p>
+                  <p className={`text-xs mt-1 ${estimateNote.startsWith('❌') ? 'text-red-600' : 'text-indigo-600'}`}>
+                    {estimateNote.startsWith('❌') ? estimateNote : `✨ ${estimateNote}`}
+                  </p>
                 )}
               </div>
               <div className="grid grid-cols-3 gap-2">
